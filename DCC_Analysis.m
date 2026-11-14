@@ -38,8 +38,20 @@
 clearvars; close all; clc
 
 %% Load Data
-load('projectdata.mat');
-load('projectdate.mat'); % T×1 datetime
+% Repointed (2026-08-25) at the USD master dataset (Build_MasterData_USD.m
+% output), Jan 2013-Nov 2024, replacing projectdata.mat/projectdate.mat.
+% NOTE: this script is superseded for residual generation -- it overwrites
+% stdResid/condVarMod sequentially across GARCH -> GJR -> FIGARCH with no
+% BIC/guardrail selection (see CLAUDE.md bug #4), so its ResidualSTD-style
+% output should not be used. rebuild_residualstd.m + DCC_ADCC_Parameters.m
+% is the correct, per-series-selected path. Kept repointed here only for
+% the standalone performance-metrics/correlation-matrix summary it prints.
+% Runs on ALL 18 series in the master dataset (2026-08-25, per user
+% instruction), not just the original manuscript's 9-asset subset.
+load('MasterData_USD_2013_2024.mat', 'M');
+srcCols = M.Properties.VariableNames(2:end);
+data = M{:, srcCols};
+date = datenum(M.Period);
 
 % Data=table2array(data);
 R   = diff(log(data)); % T×N returns
@@ -63,8 +75,7 @@ sharpeRatio = (annualReturn - riskFreeAnn) ./ annualVolatility;
 correlationMatrix = corrcoef(R);
 
 % Prepare and display results table
-indexNames = ["SAfw","Ausfw","Argfw","chifw","SP500", ...
-              "MSCIEM","Bond","Gold","Liv-ex100"]';
+indexNames = string(srcCols)';
 PerfTable = table( indexNames, annualReturn', annualVolatility', sharpeRatio', ...
     'VariableNames', {'Index', 'AnnReturn', 'AnnVolatility', 'SharpeRatio'} );
 disp('=== Performance Metrics ===');
@@ -177,7 +188,7 @@ for i = 1:N
 
     if have_fmincon
         [pHat, fval,EXITFLAG,OUTPUT,LAMBDA,GRAD,HESSIAN] = fmincon(obj, p0, [],[],[],[], lb, ub, [], opts);
-         Stderr=(1.0/sqrt(65)).*sqrt(diag(inv(HESSIAN)));
+         Stderr=(1.0/sqrt(T)).*sqrt(diag(inv(HESSIAN)));   % was hardcoded sqrt(65) for the old 66-month sample; T is now 142
 
     else
         % Fallback: fminsearch with soft bounds penalty
@@ -222,7 +233,7 @@ dcc_neglog = @(x) dccNegLogLikelihood(x, stdResid, Qbar);
 
 [theta_dcc, fval_dcc,EXITFLAG,OUTPUT,LAMBDA,GRAD,HESSIAN] = fmincon( dcc_neglog, x0_dcc, A_dcc, b_dcc, [],[], lb_dcc, ub_dcc, [], opts );
 a_dcc = theta_dcc(1);  b_dcc = theta_dcc(2);
-Stderr=(1.0/sqrt(65)).*sqrt(diag(inv(HESSIAN)));
+Stderr=(1.0/sqrt(T)).*sqrt(diag(inv(HESSIAN)));   % was hardcoded sqrt(65) for the old 66-month sample; T is now 142
 ta_dcc=theta_dcc(1)/Stderr(1);tb_dcc=theta_dcc(2)/Stderr(2);
 fprintf('\nDCC Estimates: a = %.4f, b = %.4f\n', a_dcc, b_dcc);
 
@@ -244,9 +255,11 @@ fprintf('ADCC Estimates: a = %.4f, b = %.4f, g = %.4f\n', a_adcc, b_adcc, g_adcc
 Rt_dcc  = computeDCC(stdResid, Qbar, a_dcc, b_dcc);
 Rt_adcc = computeADCC(stdResid, Qbar, Sbar, a_adcc, b_adcc, g_adcc);
 
-%% 7. Plot correlation vs benchmark (last column)
-bench = N;
-others = 1:N-1;
+%% 7. Plot correlation vs benchmark (Liv-ex100)
+% Was `bench = N` assuming Liv-ex100 was the last column -- not true now
+% that all 18 series are loaded (Gold_USD is last); found by name instead.
+bench  = find(indexNames == "LivEx100_USD");
+others = setdiff(1:N, bench);
  
 figure('Color','w');
 subplot(2,1,1); hold on;
@@ -286,9 +299,8 @@ for t = 1:T
 end
 
 %% Plot Dynamic Correlations with Liv-ex100
-benchmarkIdx = N;             % Liv-ex100 is the last column
- countryIdx   = 1:(N-1);
-% countryIdx   = 1:4;
+benchmarkIdx = bench;          % Liv-ex100, found by name above
+countryIdx   = others;
 
 figure('Color','w');
 hold on;

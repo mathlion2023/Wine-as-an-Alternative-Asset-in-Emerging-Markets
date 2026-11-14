@@ -1,18 +1,36 @@
 %% portfolio_paths_tc.m
-% Cumulative performance (2019–2024) under:
+% Cumulative performance (2013–2024) under:
 %   (A) periodic rebalancing with proportional transaction costs
 %   (B) buy-and-hold (no rebalancing, no costs)
 %
 % Requirements in workspace before running:
-%   - R: T x 9 monthly returns (simple or log)
+%   - R: T x 8 monthly returns (simple or log)
 %   - dates: T x 1 datetime
 %
 % Column order of R:
-% ["SAfw","Ausfw","Argfw","chifw","SP500","MSCIEM","Bond","Gold","Liv_ex100"]
+% ["SAfw","Ausfw","Argfw","chifw","SP500","MSCIEM","Gold","Liv_ex100"]
 
 clear; clc;
-load('projectdata.mat');
-load('projectdate.mat'); % T×1 datetime
+% Repointed (2026-08-25) at the USD master dataset (Build_MasterData_USD.m
+% output); re-repointed (2026-10-08) at the SHORT/baseline 4-country panel
+% (MasterData_USD_2019_2024_4country.mat, Jun2019-Nov2024) instead of the
+% LONG 2013-2024 panel. This 8-asset system needs South Africa, and SA has
+% no real data before Jun 2019 (Strauss & Co. was only founded that year;
+% the previous "SA_wine_USD" column for 2013-2019 came from an unverified,
+% now-discontinued source -- see Build_MasterData_USD_v2.m header). The
+% LONG panel no longer even has an SA_wine_USD column (correctly dropped
+% there); this script's own 8-asset design was always implicitly a
+% 2019-2024 system, so the short panel is the right -- not a reduced --
+% window for it.
+% Fixed weight vectors below (W.GMV etc.) were optimized for the original
+% 9-asset universe in the manuscript and are NOT re-derived here. "Bond"
+% dropped (2026-08-25, per user instruction) -- its GlobalAgg_USD mapping
+% was an unconfirmed assumption; see below for how the weights were
+% adjusted to compensate.
+load('MasterData_USD_2019_2024_4country.mat', 'M');
+srcCols = ["SA_wine_USD","AUS_wine_USD","ARG_wine_USD","CHL_wine_USD","SPX_USD","MSCIEM_USD","Gold_USD","LivEx100_USD"];
+data = M{:, srcCols};
+date = datenum(M.Period);
 
 % Data=table2array(data);
 R   = diff(log(data)); % T×N returns
@@ -29,22 +47,34 @@ costRate      = 0.005;
 % Rebal frequency for the “rebalancing” simulation: 'monthly','quarterly','annual'
 rebalanceFreq = 'monthly';
 
-% Fixed weights (from your table, as decimals summing to 1)
-W = struct();
-W.GMV          = [ 1  ,  4,  2,  3, 11, 11, 22, 19, 26 ]'/100;
-W.Tangency     = [ 1  ,  4,  2,  2, 20, 15, 10, 27, 21 ]'/100;
-W.RiskParity   = [ 1  ,  1,  1,  1, 44,  1, 30, 19,  1 ]'/100;
-W.CVaR         = [ 1  ,  1,  1,  0,  9,  0,  9, 26, 54 ]'/100;
-W.Turnoverpen  = [ 1  ,  4,  2,  2, 19, 15, 11, 26, 20 ]'/100;
-W.BL_Tangency  = [ 0  ,  2,  2,  0, 32, 19,  0, 37,  7 ]'/100;
+% Fixed weights (from your table, as decimals summing to 1).
+% Order: SAfw, Ausfw, Argfw, chifw, SP500, MSCIEM, Bond, Gold, Liv-ex100
+W9 = struct();
+W9.GMV          = [ 1  ,  4,  2,  3, 11, 11, 22, 19, 26 ]'/100;
+W9.Tangency     = [ 1  ,  4,  2,  2, 20, 15, 10, 27, 21 ]'/100;
+W9.RiskParity   = [ 1  ,  1,  1,  1, 44,  1, 30, 19,  1 ]'/100;
+W9.CVaR         = [ 1  ,  1,  1,  0,  9,  0,  9, 26, 54 ]'/100;
+W9.Turnoverpen  = [ 1  ,  4,  2,  2, 19, 15, 11, 26, 20 ]'/100;
+W9.BL_Tangency  = [ 0  ,  2,  2,  0, 32, 19,  0, 37,  7 ]'/100;
 
-portNames = fieldnames(W);
+% Bond (position 7) dropped and each vector rescaled to sum back to 1
+% across the remaining 8 assets -- this preserves the *relative* weights
+% among the other assets from the original table; it is NOT a
+% re-optimization for the new 8-asset universe.
+bondIdx = 7;
+portNames = fieldnames(W9);
+W = struct();
+for k = 1:numel(portNames)
+    w = W9.(portNames{k});
+    w(bondIdx) = [];
+    W.(portNames{k}) = w / sum(w);
+end
 
 %% ===== SANITY CHECKS =====
 dates  = date(2:end);
 [T, N] = size(R);
-if N ~= 9
-    error('R must be T x 9.');
+if N ~= 8
+    error('R must be T x 8.');
 end
 if numel(dates) ~= T
     error('dates must have T rows to match R.');
@@ -111,8 +141,9 @@ for k = 1:numel(portNames)
     summ(row,:) = {string(name), "Buy&Hold", CR, AM, AV, SR};
 end
 
-disp('==== Cumulative and annualized stats (2019–2024) ====');
+disp('==== Cumulative and annualized stats (2019-2024) ====');
 disp(summ);
+writetable(summ, 'portfolio_paths_tc_2019_2024.csv');
 
 %% ===== PLOTS =====
 % 1) Wealth indices
@@ -187,12 +218,21 @@ turnover = zeros(T,1);
 turnover(1) = sum(abs(w));           % report initial turnover (from cash to invested)
 
 for t = 2:T
-    % 1) Drift weights with returns (pre-trade weights)
-    w_pre = (w .* G(t-1,:).');
+    % BUGFIX (2026-10-10, code-review finding #2): this loop previously used
+    % G(t-1,:) for both w_pre and grossPort, which double-counts period t-1's
+    % return (already applied in the prior iteration / the t=1 initialization
+    % above line 216) and lags every wealth/weight update by one period
+    % relative to the dates vector. Fixed to use G(t,:), matching
+    % simulateBuyAndHold's (correct) convention below. The post-loop patch
+    % that used to re-apply G(T,:) on top of an already-lagged wealth(T) is
+    % removed since this loop now applies period T's return in iteration T.
+    %
+    % 1) Drift weights with period-t returns (pre-trade weights, end of period t)
+    w_pre = (w .* G(t,:).');
     w_pre = w_pre / sum(w_pre);      % normalize to sum to 1
 
-    % 2) Wealth evolves by pre-trade portfolio return
-    grossPort = sum(w .* G(t-1,:).');  % previous post-trade weights times last period gross
+    % 2) Wealth evolves by period-t portfolio return (using weights held during period t)
+    grossPort = sum(w .* G(t,:).');
     wealth(t) = wealth(t-1) * grossPort;
 
     % 3) If rebalance date, trade to target and pay costs today (before next period)
@@ -208,9 +248,6 @@ for t = 2:T
         turnover(t) = 0;
     end
 end
-
-% Apply last month gross return
-wealth(T) = wealth(T) * sum(w .* G(T,:).');
 
 out.wealth   = wealth;          % path of wealth (starts at ~1 - initCost, base ~1)
 out.turnover = turnover;        % L1 turnover each decision date

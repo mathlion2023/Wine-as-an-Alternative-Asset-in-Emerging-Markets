@@ -71,6 +71,21 @@ else
     adcc = [];
 end
 
+%% ---- Persist results (2026-09-03): no prior version of this script saved
+% a table/CSV artifact -- console fprintf only -- so Table 7 could not be
+% regenerated without a human re-running it and transcribing numbers by
+% hand. Save both a .mat (full structs) and a flat CSV (Table 7's shape).
+save('DCC_ADCC_Results.mat', 'dcc', 'adcc');
+Model  = ["DCC";"DCC";"ADCC";"ADCC";"ADCC"];
+Param  = ["a";"b";"a";"b";"g"];
+Est    = [dcc.theta(1); dcc.theta(2); adcc.theta(1); adcc.theta(2); adcc.theta(3)];
+Tstat  = [dcc.t(1); dcc.t(2); adcc.t(1); adcc.t(2); adcc.t(3)];
+Persistence = [dcc.persistence; NaN; adcc.persistence; NaN; NaN];
+HalfLife    = [dcc.halflife; NaN; adcc.halflife; NaN; NaN];
+tab7 = table(Model, Param, Est, Tstat, Persistence, HalfLife);
+writetable(tab7, 'tab_dcc_adcc_18.csv');
+fprintf('Saved DCC_ADCC_Results.mat and tab_dcc_adcc_18.csv\n');
+
 %% ========================== helper functions ===========================
 
 function out = packResults(modelName, theta, nll, exitflag, output, H, grad, nllfun, T)

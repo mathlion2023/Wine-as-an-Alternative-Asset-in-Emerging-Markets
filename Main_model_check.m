@@ -1,13 +1,20 @@
 % model
 clc; clear all;
-load('projectdata.mat');
-load('projectdate.mat'); % T×1 datetime
+% Repointed (2026-08-25) at the USD master dataset (Build_MasterData_USD.m
+% output), Jan 2013-Nov 2024, replacing projectdata.mat/projectdate.mat
+% (Jun 2019-Nov 2024, 66 months). Runs on ALL 18 series in the master
+% dataset (2026-08-25, per user instruction), not just the original
+% manuscript's 9-asset subset.
+load('MasterData_USD_2013_2024.mat', 'M');
+srcCols    = M.Properties.VariableNames(2:end);
+indexNames = string(srcCols)';
+data = M{:, srcCols};
+date = datenum(M.Period); % T×1 datenum
 
 % Data=table2array(data);
 R   = diff(log(data)); % T×N returns
 [T, N] = size(R);
 % R: T x N matrix of returns (monthly or daily). Example names:
-indexNames = ["SAfw","Ausfw","Argfw","chifw","SP500","MSCIEM","Bond","Gold","Liv-ex100"]';
 %% Fit & select per series
 OUT = fitIndices_autoModels(R, indexNames);
 
@@ -24,9 +31,8 @@ nexttile; plot(OUT.stdResid(:,i)); title(indexNames(i) + " standardized residual
 nexttile; plot(sqrt(OUT.condVar(:,i))); title(indexNames(i) + " conditional stdev"); grid on;
 
 %% Precompute unconditional matrices
-% stdResid=OUT.stdResid;
-stdResid=Residual;
-Qbar = cov(stdResid, 'partialrows');               
+stdResid=OUT.stdResid;   % was `Residual` (undefined) -- OUT.stdResid is fitIndices_autoModels' actual output
+Qbar = cov(stdResid, 'partialrows');
 Sbar = cov(stdResid .* (stdResid < 0), 'partialrows'); % for asymmetry
 
 %% 4. Estimate DCC parameters [a, b] by QML
@@ -42,7 +48,7 @@ dcc_neglog = @(x) dccNegLogLikelihood(x, stdResid, Qbar);
 
 [theta_dcc, fval_dcc,EXITFLAG,OUTPUT,LAMBDA,GRAD,HESSIAN] = fmincon( dcc_neglog, x0_dcc, A_dcc, b_dcc, [],[], lb_dcc, ub_dcc, [], opts );
 a_dcc = theta_dcc(1);  b_dcc = theta_dcc(2);
-Stderr=(1.0/sqrt(65)).*sqrt(diag(inv(HESSIAN)));
+Stderr=(1.0/sqrt(T)).*sqrt(diag(inv(HESSIAN)));   % was hardcoded sqrt(65) for the old 66-month sample; T is now 142
 ta_dcc=theta_dcc(1)/Stderr(1);tb_dcc=theta_dcc(2)/Stderr(2);
 fprintf('\nDCC Estimates: a = %.4f, b = %.4f\n', a_dcc, b_dcc);
 
@@ -64,9 +70,11 @@ fprintf('ADCC Estimates: a = %.4f, b = %.4f, g = %.4f\n', a_adcc, b_adcc, g_adcc
 Rt_dcc  = computeDCC(stdResid, Qbar, a_dcc, b_dcc);
 Rt_adcc = computeADCC(stdResid, Qbar, Sbar, a_adcc, b_adcc, g_adcc);
 
-%% 7. Plot correlation vs benchmark (last column)
-bench = N;
-others = 1:N-1;
+%% 7. Plot correlation vs benchmark (Liv-ex100)
+% Was `bench = N` assuming Liv-ex100 was the last column -- no longer true
+% now that all 18 series are loaded (Gold_USD is last); found by name instead.
+bench  = find(indexNames == "LivEx100_USD");
+others = setdiff(1:N, bench);
  
 figure('Color','w');
  hold on;
@@ -87,14 +95,13 @@ xlabel('Year'); ylabel('Corr (ADCC)'); %title('ADCC-FIGARCH(1,1)');
 legend(indexNames(others),'Location','eastoutside');
 axis tight;
 %% Plot Dynamic Correlations with Liv-ex100
-benchmarkIdx = N;             % Liv-ex100 is the last column
- countryIdx   = 1:(N-1);
-% countryIdx   = 1:4;
+benchmarkIdx = bench;          % Liv-ex100, found by name above
+countryIdx   = others;
 
 figure('Color','w');
 hold on;
 for j = countryIdx
-    plot(date(2:end), squeeze(Rt(j, benchmarkIdx, :)), 'LineWidth', 1.2);
+    plot(date(2:end), squeeze(Rt_dcc(j, benchmarkIdx, :)), 'LineWidth', 1.2);   % was undefined `Rt` -- this script never computed one, only Rt_dcc/Rt_adcc above
 end
 hold off;
 grid on;
@@ -106,9 +113,10 @@ legend(indexNames(countryIdx), 'Location', 'EastOutside');
 title('DCC-FIGARCH(1,1): Dynamic Correlations with Liv-ex100');
 axis tight;
 %% Save Results
-save('Performance_and_DCC.mat', 'PerfTable', 'correlationMatrix', ...
-     'condVarMod', 'stdResid', 'Rt', 'date', 'indexNames');
-writetable(PerfTable, 'PerformanceMetrics.csv');
+% PerfTable/correlationMatrix/condVarMod were never computed by this
+% script (that block was copy-pasted from DCC_Analysis.m) -- saving what
+% this script actually produces instead.
+save('Performance_and_DCC.mat', 'OUT', 'stdResid', 'Rt_dcc', 'Rt_adcc', 'date', 'indexNames');
 
 %% Acknowledgements
 % Data for Australia, Argentina, and Chile were kindly provided by Dr. Gertjan Verdickt (University of Auckland).

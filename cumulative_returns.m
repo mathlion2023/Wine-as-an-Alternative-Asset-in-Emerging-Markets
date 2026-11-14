@@ -1,4 +1,4 @@
-%% Cumulative returns for fixed-weight portfolios (2019–2024)
+%% Cumulative returns for fixed-weight portfolios (2013–2024)
 % Assumptions:
 % - Monthly returns for 9 assets in columns, aligned with 'assetNames' below
 % - Full monthly rebalancing to the fixed weights
@@ -15,8 +15,19 @@ clear; clc;
 % T = readtable('monthly_returns.csv'); 
 % dates = datetime(T.Date); T.Date = [];
 % R = table2array(T);  % simple returns in decimal (e.g. 0.02 = 2%)
-load('projectdata.mat');
-load('projectdate.mat'); % T×1 datetime
+% Repointed (2026-08-25) at the USD master dataset (Build_MasterData_USD.m
+% output); re-repointed (2026-10-08) at the SHORT/baseline 4-country panel
+% (Jun2019-Nov2024) -- this 8-asset system needs South Africa, which has
+% no real data before Jun 2019 (see portfolio_paths_tc.m header for detail).
+% Fixed weight vectors below (W.GMV etc.) were optimized for the original
+% 9-asset universe in the manuscript and are NOT re-derived here. "Bond"
+% dropped (2026-08-25, per user instruction) -- its GlobalAgg_USD mapping
+% was an unconfirmed assumption; see below for how the weights were
+% adjusted to compensate.
+load('MasterData_USD_2019_2024_4country.mat', 'M');
+srcCols = ["SA_wine_USD","AUS_wine_USD","ARG_wine_USD","CHL_wine_USD","SPX_USD","MSCIEM_USD","Gold_USD","LivEx100_USD"];
+data = M{:, srcCols};
+date = datenum(M.Period);
 
 % Data=table2array(data);
 R   = diff(log(data)); % T×N returns
@@ -28,16 +39,30 @@ R   = diff(log(data)); % T×N returns
 isLogReturn = true;  % set true if R contains ln(1+r)
 
 % 3) Asset order must match your table:
-assetNames = ["SAfw","Ausfw","Argfw","Chifw","SP500","MSCIEM","Bond","Gold","Liv_ex100"];
+assetNames = ["SAfw","Ausfw","Argfw","Chifw","SP500","MSCIEM","Gold","Liv_ex100"];
 
-% 4) Fixed weights (percent -> decimal) from your table
+% 4) Fixed weights (percent -> decimal) from your table.
+% Order: SAfw, Ausfw, Argfw, Chifw, SP500, MSCIEM, Bond, Gold, Liv_ex100
+W9 = struct();
+W9.GMV          = [ 1  ,  4,  2,  3, 11, 11, 22, 19, 26 ]'/100;
+W9.Tangency     = [ 1  ,  4,  2,  2, 20, 15, 10, 27, 21 ]'/100;
+W9.RiskParity   = [ 1  ,  1,  1,  1, 44,  1, 30, 19,  1 ]'/100;
+W9.CVaR         = [ 1  ,  1,  1,  0,  9,  0,  9, 26, 54 ]'/100;
+W9.Turnoverpen  = [ 1  ,  4,  2,  2, 19, 15, 11, 26, 20 ]'/100;
+W9.BL_Tangency  = [ 0  ,  2,  2,  0, 32, 19,  0, 37,  7 ]'/100;
+
+% Bond (position 7) dropped and each vector rescaled to sum back to 1
+% across the remaining 8 assets -- this preserves the *relative* weights
+% among the other assets from the original table; it is NOT a
+% re-optimization for the new 8-asset universe.
+bondIdx = 7;
+namesW9 = fieldnames(W9);
 W = struct();
-W.GMV          = [ 1  ,  4,  2,  3, 11, 11, 22, 19, 26 ]'/100;
-W.Tangency     = [ 1  ,  4,  2,  2, 20, 15, 10, 27, 21 ]'/100;
-W.RiskParity   = [ 1  ,  1,  1,  1, 44,  1, 30, 19,  1 ]'/100;
-W.CVaR         = [ 1  ,  1,  1,  0,  9,  0,  9, 26, 54 ]'/100;
-W.Turnoverpen  = [ 1  ,  4,  2,  2, 19, 15, 11, 26, 20 ]'/100;
-W.BL_Tangency  = [ 0  ,  2,  2,  0, 32, 19,  0, 37,  7 ]'/100;
+for k = 1:numel(namesW9)
+    w = W9.(namesW9{k});
+    w(bondIdx) = [];
+    W.(namesW9{k}) = w / sum(w);
+end
 
 % Optional: sanity checks
 % namesW = fieldnames(W);
@@ -54,7 +79,7 @@ W.BL_Tangency  = [ 0  ,  2,  2,  0, 32, 19,  0, 37,  7 ]'/100;
 
 
 [T, N] = size(R);
-assert(N == numel(assetNames), 'R must have 9 columns matching assetNames.');
+assert(N == numel(assetNames), 'R must have 8 columns matching assetNames.');
 
 % Handle any NaNs by row-wise deletion (or choose smarter imputation if preferred)
 good = all(isfinite(R), 2);
@@ -114,7 +139,7 @@ for k = 1:numel(portNames)
     summ.Sharpe(k)    = sharpe;
 end
 
-disp('==== Cumulative return (2019–2024) and annualized stats ====');
+disp('==== Cumulative return (2013–2024) and annualized stats ====');
 disp(summ);
 
 %% ====== PLOTS ======
@@ -127,7 +152,7 @@ for k = 1:numel(portNames)
 end
 %yline(100,'k:');
 xlabel('Date'); ylabel('Index (base = 100)');
-% title('Cumulative Performance of Fixed-Weight Portfolios (2019–2024)');
+% title('Cumulative Performance of Fixed-Weight Portfolios (2013–2024)');
 legend('Location', 'best'); grid on;
 datetick
 axis tight
@@ -138,8 +163,8 @@ ylabel('Cumulative Return (decimal)');
 title('Cumulative Return 2019–2024');
 grid on;
 
-%% ====== OPTIONAL: export summary ======
-% writetable(summ, 'portfolio_cum_returns_2019_2024.csv');
+%% ====== export summary ======
+writetable(summ, 'portfolio_cum_returns_2019_2024.csv');
 
 
 

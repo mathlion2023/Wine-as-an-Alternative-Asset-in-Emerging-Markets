@@ -7,11 +7,22 @@ switch lower(kind)
     otherwise, error('kind');
 end
 M.Distribution = dist;
-[Est,~,logL] = estimate(M, y, 'Display','off');
-[v,z] = infer(Est, y);
+[Est,EstParamCov,logL] = estimate(M, y, 'Display','off');
+v = infer(Est, y);          % infer() on garch/gjr/egarch returns [V,LogL], not residuals
+z = y ./ sqrt(v);           % standardized residuals computed directly
 
 [pvec, names] = flattenParams(Est);
-k = numel(pvec); n = numel(z);
+% BUG FIX (2026-10-09, peer-review-flagged): k used to come from
+% flattenParams, which only picks up isnumeric&&isscalar fields of Est --
+% for garch/gjr/egarch that means {P,Q,Constant,Offset,UnconditionalVariance},
+% a fixed set of 5 fields for EVERY model type, since the real fitted
+% coefficients (ARCH/GARCH/Leverage) live in cell arrays and were silently
+% skipped. This made k=5 identically for GARCH, GJR, and EGARCH regardless
+% of each model's true parameter count, corrupting every BIC in Tables 4-6.
+% Fix: k is the number of ACTUALLY ESTIMATED free parameters, i.e. the size
+% of estimate()'s own parameter-covariance matrix (GARCH=3, GJR=EGARCH=4
+% for order (1,1), confirmed against the toolbox directly).
+k = size(EstParamCov,1); n = numel(z);
 [AIC,BIC] = ic(logL,k,n);
 
 res = struct('name',upper(kind),'params',pvec,'paramNames',{names}, ...
@@ -62,14 +73,32 @@ D = struct('LBz_p',p1,'LBz2_p',p2,'ARCHLM_p',p3);
 end
 
 function [pvec, names] = flattenParams(Est)
-% extract scalar numeric fields in a stable order
-fn = fieldnames(Est); pvec = []; names = strings(0,1);
-for k=1:numel(fn)
-    v = Est.(fn{k});
-    if isnumeric(v) && isscalar(v) && isfinite(v)
-        pvec(end+1,1) = v; names(end+1,1) = string(fn{k}); %#ok<AGROW>
+% Extract the ACTUALLY ESTIMATED coefficients of a garch/gjr/egarch object.
+% BUG FIX (2026-10-09, peer-review-flagged): the previous version grabbed
+% any isnumeric&&isscalar field, which picks up {P,Q,Constant,Offset,
+% UnconditionalVariance} -- model ORDERS and a DERIVED quantity, not fitted
+% parameters -- while silently skipping ARCH/GARCH/Leverage, which the
+% toolbox stores as cell arrays (one cell per lag) and are the real
+% estimated coefficients. Constant is kept; P, Q, Offset (fixed at 0 by
+% default), and UnconditionalVariance (a function of the other parameters,
+% not a free parameter) are excluded.
+pvec = Est.Constant; names = "Constant";
+if isprop(Est,'ARCH') || isfield(Est,'ARCH')
+    for j = 1:numel(Est.ARCH)
+        pvec(end+1,1) = Est.ARCH{j}; names(end+1,1) = "ARCH"+j; %#ok<AGROW>
     end
 end
+if isprop(Est,'Leverage') || isfield(Est,'Leverage')
+    for j = 1:numel(Est.Leverage)
+        pvec(end+1,1) = Est.Leverage{j}; names(end+1,1) = "Leverage"+j; %#ok<AGROW>
+    end
+end
+if isprop(Est,'GARCH') || isfield(Est,'GARCH')
+    for j = 1:numel(Est.GARCH)
+        pvec(end+1,1) = Est.GARCH{j}; names(end+1,1) = "GARCH"+j; %#ok<AGROW>
+    end
+end
+pvec = pvec(:); names = names(:);
 end
 
 function p = softbox(x, lb, ub), p = lb + (ub-lb)./(1+exp(-x)); end

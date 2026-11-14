@@ -11,54 +11,66 @@
 clear; clc;
 
 %% USER SETTINGS
-% FILE = 'Strauss Wine All updated.xlsx';   % <-- exact filename
-% SHEET = 'SAOnly';   % or 'Sheet1' if needed
-FILE = 'Data Australia';   % <-- exact filename
-SHEET = 1;  
-DATE_START = datetime(2019,1,1);
-DATE_END   = datetime(2024,12,31);
+DATE_START = datetime(2013,1,1);          % matches the extended Jan2013-Nov2024 index sample
+DATE_END   = datetime(2024,11,30);
 MIN_TRADES_PER_MONTH = 8;                 % change to your threshold
 APPEND_FORMAT_TO_ID = false;              % set true if you want ID = WineName|Vintage|Format
 
-%% READ + MAP COLUMNS (robust to header variants)
-T0 = readtable(FILE,'Sheet',SHEET);
- col.Country  = pickVar(T0, ["wine_country","Country","country","COUNTRY","Origin"]);
-
-col.Name     = pickVar(T0, ["WineName","name","Label","Wine","Product"]);
-col.Vintage  = pickVar(T0, ["Vintage","vintage","Year"]);
-col.Date     = pickVar(T0, ["DateSold","SaleDate","Date","ActionDay","AuctionDate","SettlementDate","ym"]);
-% price is not used for coverage metrics but we keep for sanity
-col.Price    = pickVar(T0, ["PricePer750ml","Price_after_fees","pricePerBottle","Price","AllInPrice","HammerPrice"]);
-% optional size/format column
-col.Format   = pickVar(T0, ["Format","Bottle","BottleSize","Size","SizeML","ML","Volume"], true);  % optional
+% Two raw sources feed this table: the Verdickt dataset (Argentina,
+% Australia, Chile; has its own wine_country column) and Strauss & Co.'s
+% South Africa listing (SAOnly; the updated 2026-09-04 workbook dropped
+% its Country column entirely, so every SAOnly row is tagged South Africa
+% via DEFAULT_COUNTRY -- there is no longer a way to exclude any subset of
+% it on a country basis, so all 5,187 rows are used).
+sources = struct( ...
+    'file',           {'Data Australia.xlsx',              'Strauss Wine All updated.xlsx'}, ...
+    'sheet',          {1,                                   'SAOnly'}, ...
+    'defaultCountry', {"",                                  "South Africa"});
 
 T = table;
- T.Country = lower(strtrim(string(T0.(col.Country))));
-T.Name    = strtrim(string(T0.(col.Name)));
-T.Vintage = double(T0.(col.Vintage));
-T.Price   = double(T0.(col.Price));
+for s = 1:numel(sources)
+    T0 = readtable(sources(s).file, 'Sheet', sources(s).sheet);
+    col.Country  = pickVar(T0, ["wine_country","Country","country","COUNTRY","Origin"], true);  % optional
+    col.Name     = pickVar(T0, ["WineName","name","Label","Wine","Product","Wine Name"]);
+    col.Vintage  = pickVar(T0, ["Vintage","vintage","Year"]);
+    col.Date     = pickVar(T0, ["DateSold","SaleDate","Date","ActionDay","AuctionDate","Auction Date","SettlementDate","ym"]);
+    % price is not used for coverage metrics but we keep for sanity
+    col.Price    = pickVar(T0, ["PricePer750ml","Price_after_fees","pricePerBottle","Price","AllInPrice","HammerPrice","Price per 750ml"]);
+    % optional size/format column
+    col.Format   = pickVar(T0, ["Format","Bottle","BottleSize","Size","SizeML","ML","Volume"], true);  % optional
 
-% Parse dates (handles '01-May-2022', '2019-06-01', Excel serials)
-T.Month = normalizeMonth(T0.(col.Date));  % month start (datetime)
+    Ts = table;
+    if col.Country == ""
+        Ts.Country = repmat(lower(strtrim(sources(s).defaultCountry)), height(T0), 1);
+    else
+        Ts.Country = lower(strtrim(string(T0.(col.Country))));
+        Ts.Country(Ts.Country == "") = missing;   % blank Country tag = unidentified/other-country lot, not this country
+    end
+    Ts.Name    = strtrim(string(T0.(col.Name)));
+    Ts.Vintage = double(T0.(col.Vintage));
+    Ts.Price   = double(T0.(col.Price));
 
-% Keep valid rows and window
- valid = ~ismissing(T.Country) & ~ismissing(T.Name) & ~isnan(T.Vintage) ...
-         & ~isnat(T.Month) & T.Month>=DATE_START & T.Month<=DATE_END;
+    % Parse dates (handles '01-May-2022', '2019-06-01', Excel serials)
+    Ts.Month = normalizeMonth(T0.(col.Date));  % month start (datetime)
 
-% valid = ~ismissing(T.Name) & ~isnan(T.Vintage) ...
-%         & ~isnat(T.Month) & T.Month>=DATE_START & T.Month<=DATE_END;
-T = T(valid, :);
+    % Build ItemID: WineName|Vintage (optionally add Format)
+    if ~isempty(col.Format) && APPEND_FORMAT_TO_ID
+        fmt = lower(strtrim(string(T0.(col.Format))));
+        Ts.ItemID = lower(strtrim(Ts.Name)) + "|" + string(Ts.Vintage) + "|" + fmt;
+    else
+        Ts.ItemID = lower(strtrim(Ts.Name)) + "|" + string(Ts.Vintage);
+    end
 
-% Build ItemID: WineName|Vintage (optionally add Format)
-if ~isempty(col.Format) && APPEND_FORMAT_TO_ID
-    fmt = lower(strtrim(string(T0.(col.Format))));
-    T.ItemID = lower(strtrim(T.Name)) + "|" + string(T.Vintage) + "|" + fmt(valid);
-else
-    T.ItemID = lower(strtrim(T.Name)) + "|" + string(T.Vintage);
+    T = [T; Ts]; %#ok<AGROW>
 end
 
+% Keep valid rows and window
+valid = ~ismissing(T.Country) & ~ismissing(T.Name) & ~isnan(T.Vintage) ...
+        & ~isnat(T.Month) & T.Month>=DATE_START & T.Month<=DATE_END;
+T = T(valid, :);
+
 % Sort canonical
- T = sortrows(T, {'Country','ItemID','Month'});
+T = sortrows(T, {'Country','ItemID','Month'});
 
 
 %% PER-COUNTRY COVERAGE + RS STATS

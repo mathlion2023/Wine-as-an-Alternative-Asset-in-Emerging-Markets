@@ -12,9 +12,8 @@
 % ========================================================================
 
 clearvars -except Z names; clc;
-load('ResidualSTD.mat')
+load('ResidualSTD.mat')   % provides stdResid and names (was hardcoded here, out of sync with rebuild_residualstd.m's actual series list -- now taken from the file itself)
 Z=stdResid;
-names = ["SAfw","Ausfw","Argfw","chifw","SP500","MSCIEM","Bond","Gold","Liv-ex100"]';
 %% -------- settings --------
 H      = 10;          % FEVD forecast horizon
 pMin   = 1; pMax = 6; % VAR lag selection range
@@ -44,6 +43,8 @@ fprintf('[RET] Selected VAR order p = %d by %s\n', p_ret, upper(crit));
 ThetaH_r       = gfevd(VARr, SigU_r, H);                % N x N FEVD at horizon H
 ConnRET        = connectedness(ThetaH_r, names);        % DY table (TO/FROM/NET/TSI)
 disp('=== Connectedness (RETURNS shocks) ==='); disp(ConnRET.table);
+fprintf('[RET] Total Spillover Index = %.3f%%\n', ConnRET.TSI);
+writetable(ConnRET.table, 'tab_spillover_RET_18.csv');
 
 %% ====== 3) Volatility spillovers (use squared shocks) ======
 Z2 = (Z.^2) - mean(Z.^2,'omitnan');                     % center for stationarity
@@ -54,31 +55,49 @@ fprintf('[VOL] Selected VAR order p = %d by %s\n', p_vol, upper(crit));
 ThetaH_v       = gfevd(VARv, SigU_v, H);
 ConnVOL        = connectedness(ThetaH_v, names);
 disp('=== Connectedness (VOLTILITY shocks, squared z) ==='); disp(ConnVOL.table);
+fprintf('[VOL] Total Spillover Index = %.3f%%\n', ConnVOL.TSI);
+writetable(ConnVOL.table, 'tab_spillover_VOL_18.csv');
 
 %% ====== 4) Optional: rolling connectedness over time ======
 if doRoll
-    [TSI_ret, dates_ret] = rollingTSI(Z,  W, Hroll, pMin, pMax, crit);
-    [TSI_vol, dates_vol] = rollingTSI(Z2, W, Hroll, pMin, pMax, crit);
-
-    figure('Name','Rolling Total Spillover Index');
-    plot(dates_ret, TSI_ret, '-', 'LineWidth',1.4); hold on;
-    plot(dates_vol, TSI_vol, '--', 'LineWidth',1.4);
-    grid on; datetick('x','yyyy'); xlabel('Time'); ylabel('Total Spillover Index (\%)');
+    [TSI_ret, dates_ret] = rollingTSI(Z,  W, Hroll, pMin, pMax, crit); %#ok<ASGLU>
+    [TSI_vol, dates_vol] = rollingTSI(Z2, W, Hroll, pMin, pMax, crit); %#ok<ASGLU>
+    % BUG NOTE (2026-09-03, not fixed here): rollingTSI's second output is
+    % a plain sample-index vector (1:T)', not a datenum, despite the
+    % variable name -- datetick('x','yyyy') on it would be meaningless.
+    % Plotting against sample index instead until a real date vector is
+    % threaded through; this is diagnostic-only and already flagged
+    % elsewhere as underidentified/near-singular at 18-series width.
+    fRoll = figure('Name','Rolling Total Spillover Index');
+    plot(TSI_ret, '-', 'LineWidth',1.4); hold on;
+    plot(TSI_vol, '--', 'LineWidth',1.4);
+    grid on; xlabel('Month index (rolling window, not a calendar date)'); ylabel('Total Spillover Index (%)');
     legend({'Returns','Volatility'}, 'Location','best');
-    title(sprintf('Rolling TSI (window=%d, horizon=%d)', W, Hroll));
+    exportgraphics(fRoll, 'fig_spillover_rollingTSI.png', 'Resolution', 200);
+    fprintf('Saved fig_spillover_rollingTSI.png\n');
 end
 
 %% ====== 5) Pretty panels (optional) ======
 % Adjacency-style heatmaps of pairwise contributions (RET and VOL)
-figure('Name','FEVD Contributions (RET)');
+% BUG FIX (2026-09-03): xticklabels(names)/yticklabels(names) alone
+% assigns `names` positionally to whatever default tick positions imagesc
+% happens to pick for an 18x18 matrix (MATLAB's auto tick spacing, which
+% is NOT guaranteed to be one tick per row/column once N is this large) --
+% silently mislabeling axes rather than just truncating them. Must set
+% ticks explicitly to 1:N first so each label lands on its own row/column.
+fRET = figure('Name','FEVD Contributions (RET)','Position',[100 100 800 700]);
 imagesc(100*ThetaH_r ./ sum(ThetaH_r,2)); colorbar;
-title(sprintf('RET FEVD (H=%d): shares (%%)', H));
-xticklabels(names); yticklabels(names); xtickangle(45);
+set(gca,'XTick',1:N,'XTickLabel',names,'YTick',1:N,'YTickLabel',names,'FontSize',7);
+xtickangle(45);
+exportgraphics(fRET, 'fig_spillover_fevd_RET.png', 'Resolution', 200);
+fprintf('Saved fig_spillover_fevd_RET.png\n');
 
-figure('Name','FEVD Contributions (VOL)');
+fVOL = figure('Name','FEVD Contributions (VOL)','Position',[100 100 800 700]);
 imagesc(100*ThetaH_v ./ sum(ThetaH_v,2)); colorbar;
-title(sprintf('VOL FEVD (H=%d): shares (%%)', H));
-xticklabels(names); yticklabels(names); xtickangle(45);
+set(gca,'XTick',1:N,'XTickLabel',names,'YTick',1:N,'YTickLabel',names,'FontSize',7);
+xtickangle(45);
+exportgraphics(fVOL, 'fig_spillover_fevd_VOL.png', 'Resolution', 200);
+fprintf('Saved fig_spillover_fevd_VOL.png\n');
 
 %% ====================== FUNCTIONS ======================
 

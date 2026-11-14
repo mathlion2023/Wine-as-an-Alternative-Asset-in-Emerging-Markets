@@ -1,4 +1,4 @@
-function [nll, sigma2, eps] = figarch_nll_gauss(y, p, K, burn)
+function [nll, sigma2, eps, n_used] = figarch_nll_gauss(y, p, K, burn)
 % Gaussian QML for FIGARCH(1,d,1): params p = [omega, phi, beta, d]
 % Recursion: (1 - beta L) h_t = omega + [1 - beta L - (1 - phi L)(1 - L)^d] * e_{t-1}^2
 % Truncate fractional weights at K lags.
@@ -42,12 +42,30 @@ function [nll, sigma2, eps] = figarch_nll_gauss(y, p, K, burn)
     end
 
     sigma2 = h;
-    % Gaussian QML log-likelihood
+    % Gaussian QML log-likelihood. BUG FIX (2026-09-03): this omitted the
+    % log(2*pi) normalizing constant, so nll here was NOT on the same
+    % scale as the Econometrics Toolbox's estimate()/infer() log-likelihood
+    % for garch/gjr/egarch -- every FIGARCH-vs-toolbox BIC comparison was
+    % silently invalid (FIGARCH's reported logL was inflated by
+    % 0.5*log(2*pi) per contributing observation, ~85 units of logL over
+    % ~90 obs, which alone exceeds most of the BIC gaps in Table 4). The
+    % parameter estimates (omega,phi,beta,d) and their Hessian-based t(d)
+    % are UNAFFECTED -- adding a constant to the objective doesn't move
+    % its optimum or curvature -- so Table 6's guardrail-gated model
+    % SELECTION does not change; only the reported logL/AIC/BIC magnitudes
+    % (Tables 4-5) were wrong.
     valid = isfinite(sigma2) & sigma2 > 0;
     % Start from burn+1 to reduce initialization bias
     s = max(burn+1, 2);
-    L = 0.5*( log(sigma2(s:end)) + (eps(s:end).^2) ./ sigma2(s:end) );
+    L = 0.5*( log(2*pi) + log(sigma2(s:end)) + (eps(s:end).^2) ./ sigma2(s:end) );
     nll = sum(L(valid(s:end)));
+    % BUG FIX (2026-09-03): n_used is the number of observations that
+    % actually contribute to nll (post-burn-in). Callers previously used
+    % n = numel(z) = T (the full series, including the burn-in period
+    % where sigma2 is just held at the unconditional variance, not fit),
+    % which mismatched logL's effective sample size in the BIC penalty
+    % k*log(n). Return the correct count so callers can fix this too.
+    n_used = sum(valid(s:end));
 end
 
 function w = fracdiff_weights(d, K)
